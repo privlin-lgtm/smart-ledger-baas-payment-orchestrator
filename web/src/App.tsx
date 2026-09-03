@@ -2,11 +2,15 @@ import { useEffect, useState } from 'react';
 import {
   type AccountBalance,
   type AccountType,
+  type Payout,
   type TransactionSummary,
   createAccount,
   listAccounts,
+  listPayouts,
   listTransactions,
   postSplitPayment,
+  requestPayout,
+  sendPayoutWebhook,
 } from './api';
 
 function formatCents(cents: number): string {
@@ -28,6 +32,7 @@ interface SplitRow {
 export default function App() {
   const [accounts, setAccounts] = useState<AccountBalance[]>([]);
   const [transactions, setTransactions] = useState<TransactionSummary[]>([]);
+  const [payouts, setPayouts] = useState<Payout[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -39,15 +44,38 @@ export default function App() {
   const [description, setDescription] = useState('');
   const [splits, setSplits] = useState<SplitRow[]>([{ accountId: '', amountDollars: '', kind: 'payout' }]);
 
+  const [payoutAccountId, setPayoutAccountId] = useState('');
+  const [payoutAmountDollars, setPayoutAmountDollars] = useState('');
+  const [payoutDescription, setPayoutDescription] = useState('');
+
+  // Real customer accounts only — the payout/clearing rail accounts are ledger-internal
+  // and shouldn't be picked as a source, recipient, or payout destination by hand.
+  const payableAccounts = accounts.filter((a) => a.type !== 'system');
+
   async function refresh() {
-    const [accountsData, transactionsData] = await Promise.all([listAccounts(), listTransactions()]);
+    const [accountsData, transactionsData, payoutsData] = await Promise.all([
+      listAccounts(),
+      listTransactions(),
+      listPayouts(),
+    ]);
     setAccounts(accountsData);
     setTransactions(transactionsData);
+    setPayouts(payoutsData);
   }
 
   useEffect(() => {
     refresh().catch((err: Error) => setError(err.message));
   }, []);
+
+  // Payouts settle asynchronously on the server (simulated bank-rail delay), so poll while
+  // any are still in flight to reflect the status change without a manual refresh.
+  useEffect(() => {
+    if (!payouts.some((p) => p.status === 'processing')) return;
+    const id = setInterval(() => {
+      refresh().catch((err: Error) => setError(err.message));
+    }, 2000);
+    return () => clearInterval(id);
+  }, [payouts]);
 
   const totalCents = dollarsToCents(amountDollars || '0');
   const splitTotalCents = splits.reduce((sum, s) => sum + dollarsToCents(s.amountDollars || '0'), 0);
@@ -106,6 +134,43 @@ export default function App() {
       setSplits([{ accountId: '', amountDollars: '', kind: 'payout' }]);
       await refresh();
       setNotice(`Posted transaction ${transactionId}`);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleRequestPayout(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setNotice(null);
+
+    const amountCents = dollarsToCents(payoutAmountDollars || '0');
+    if (!payoutAccountId) return setError('choose an account to pay out from');
+    if (amountCents <= 0) return setError('enter a payout amount greater than zero');
+
+    try {
+      await requestPayout({
+        idempotencyKey: crypto.randomUUID(),
+        accountId: payoutAccountId,
+        amountCents,
+        description: payoutDescription || undefined,
+      });
+      setPayoutAmountDollars('');
+      setPayoutDescription('');
+      await refresh();
+      setNotice('Payout requested — funds held, awaiting simulated bank-rail settlement');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleSimulateWebhook(payoutId: string, status: 'settled' | 'failed') {
+    setError(null);
+    setNotice(null);
+    try {
+      await sendPayoutWebhook(payoutId, status, status === 'failed' ? 'manually triggered from console' : undefined);
+      await refresh();
+      setNotice(`Simulated bank-rail webhook: payout ${status}`);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -180,7 +245,7 @@ export default function App() {
               Source account
               <select value={sourceAccountId} onChange={(e) => setSourceAccountId(e.target.value)} required>
                 <option value="">Select an account</option>
-                {accounts.map((a) => (
+                {payableAccounts.map((a) => (
                   <option key={a.account_id} value={a.account_id}>
                     {a.name} ({formatCents(a.balance_cents)})
                   </option>
@@ -209,7 +274,7 @@ export default function App() {
               <div className="split-row" key={i}>
                 <select value={row.accountId} onChange={(e) => updateSplit(i, { accountId: e.target.value })} required>
                   <option value="">Recipient</option>
-                  {accounts
+                  {payableAccounts
                     .filter((a) => a.account_id !== sourceAccountId)
                     .map((a) => (
                       <option key={a.account_id} value={a.account_id}>
@@ -246,6 +311,94 @@ export default function App() {
 
             <button type="submit">Post transaction</button>
           </form>
+        </section>
+
+        <section className="panel panel-wide">
+          <h2>Request a payout</h2>
+          <p className="hint">
+            Holds funds immediately, then settles or fails a few seconds later via a simulated bank-rail
+            webhook — or trigger the webhook yourself below.
+          </p>
+          <form className="form" onSubmit={handleRequestPayout}>
+            <label>
+              Account
+              <select value={payoutAccountId} onChange={(e) => setPayoutAccountId(e.target.value)} required>
+                <option value="">Select an account</option>
+                {payableAccounts.map((a) => (
+                  <option key={a.account_id} value={a.account_id}>
+                    {a.name} ({formatCents(a.balance_cents)})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Amount (USD)
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={payoutAmountDollars}
+                onChange={(e) => setPayoutAmountDollars(e.target.value)}
+                placeholder="50.00"
+                required
+              />
+            </label>
+            <label>
+              Description
+              <input
+                value={payoutDescription}
+                onChange={(e) => setPayoutDescription(e.target.value)}
+                placeholder="Weekly supplier payout"
+              />
+            </label>
+            <button type="submit">Request payout</button>
+          </form>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th>Amount</th>
+                <th>Status</th>
+                <th>Detail</th>
+                <th>Requested</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {payouts.map((p) => (
+                <tr key={p.id}>
+                  <td>{p.accounts?.name ?? p.account_id}</td>
+                  <td>{formatCents(p.amount_cents)}</td>
+                  <td>
+                    <span className={`badge badge-payout-${p.status}`}>{p.status}</span>
+                  </td>
+                  <td className="mono">
+                    {p.status === 'settled' && p.external_reference}
+                    {p.status === 'failed' && p.failure_reason}
+                  </td>
+                  <td>{new Date(p.requested_at).toLocaleString()}</td>
+                  <td>
+                    {p.status === 'processing' && (
+                      <div className="payout-actions">
+                        <button type="button" className="ghost" onClick={() => handleSimulateWebhook(p.id, 'settled')}>
+                          Simulate success
+                        </button>
+                        <button type="button" className="ghost" onClick={() => handleSimulateWebhook(p.id, 'failed')}>
+                          Simulate failure
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {payouts.length === 0 && (
+                <tr>
+                  <td colSpan={6}>No payouts yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </section>
 
         <section className="panel">

@@ -18,3 +18,15 @@ export const splitPaymentSchema = z.object({
   amountCents: z.number().int().positive(),
   splits: z.array(splitSchema).min(1),
 });
+
+export const createPayoutSchema = z.object({
+  idempotencyKey: z.string().min(1).max(200),
+  accountId: z.string().uuid(),
+  amountCents: z.number().int().positive(),
+  description: z.string().max(500).optional(),
+});
+
+export const payoutWebhookSchema = z.object({
+  status: z.enum(['settled', 'failed']),
+  failureReason: z.string().max(200).optional(),
+});

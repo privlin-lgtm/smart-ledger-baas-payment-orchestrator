@@ -1,6 +1,6 @@
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
 
-export type AccountType = 'platform' | 'supplier' | 'business';
+export type AccountType = 'platform' | 'supplier' | 'business' | 'system';
 
 export interface AccountBalance {
   account_id: string;
@@ -59,5 +59,41 @@ export function postSplitPayment(input: {
   return request<{ transactionId: string }>('/api/payments/split', {
     method: 'POST',
     body: JSON.stringify(input),
+  });
+}
+
+export type PayoutStatus = 'processing' | 'settled' | 'failed';
+
+export interface Payout {
+  id: string;
+  idempotency_key: string;
+  account_id: string;
+  amount_cents: number;
+  status: PayoutStatus;
+  external_reference: string | null;
+  failure_reason: string | null;
+  requested_at: string;
+  settled_at: string | null;
+  failed_at: string | null;
+  accounts: { name: string; type: AccountType } | null;
+}
+
+export function listPayouts() {
+  return request<Payout[]>('/api/payouts');
+}
+
+export function requestPayout(input: {
+  idempotencyKey: string;
+  accountId: string;
+  amountCents: number;
+  description?: string;
+}) {
+  return request<Payout>('/api/payouts', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function sendPayoutWebhook(payoutId: string, status: 'settled' | 'failed', failureReason?: string) {
+  return request<Payout>(`/api/payouts/${payoutId}/webhook`, {
+    method: 'POST',
+    body: JSON.stringify({ status, failureReason }),
   });
 }

@@ -62,7 +62,8 @@ body {
   gap: 20px;
 }
 
-.grid .panel:last-child {
+.grid .panel:last-child,
+.grid .panel-wide {
   grid-column: 1 / -1;
 }
 
@@ -134,6 +135,42 @@ th {
 .badge-business {
   background: #fef3e2;
   color: #b0731a;
+}
+
+.badge-system {
+  background: #eceef1;
+  color: #565d68;
+}
+
+.badge-payout-processing {
+  background: #fff4d6;
+  color: #92700c;
+}
+
+.badge-payout-settled {
+  background: #e9f7ef;
+  color: var(--ok);
+}
+
+.badge-payout-failed {
+  background: #fdeceb;
+  color: var(--danger);
+}
+
+.hint {
+  margin: -6px 0 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.payout-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.payout-actions button {
+  padding: 5px 8px;
+  font-size: 12px;
 }
 
 .form {
