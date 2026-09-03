@@ -1,13 +1,20 @@
 import type { FastifyInstance } from 'fastify';
 import { supabase } from '../supabase.js';
+import { parsePagination } from '../lib/pagination.js';
 
 export async function transactionRoutes(app: FastifyInstance) {
-  app.get('/api/transactions', async (_req, reply) => {
-    const { data, error } = await supabase
+  app.get('/api/transactions', async (req, reply) => {
+    const pagination = parsePagination(req.query);
+    if ('error' in pagination) return reply.code(400).send({ error: pagination.error });
+
+    let query = supabase
       .from('transactions')
       .select('id, description, idempotency_key, reversal_of, created_at')
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(pagination.limit);
+    if (pagination.before) query = query.lt('created_at', pagination.before);
+
+    const { data, error } = await query;
     if (error) return reply.code(500).send({ error: error.message });
     return data;
   });

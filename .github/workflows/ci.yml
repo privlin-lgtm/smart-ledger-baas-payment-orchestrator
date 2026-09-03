@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:api
+      - run: npm run build:web
+      - run: npm audit --audit-level=high
+
+  test-api:
+    runs-on: ubuntu-latest
+    # These integration tests hit a real Supabase project (see api/test/README.md) --
+    # they only run once RUN_INTEGRATION_TESTS is set to 'true' as a repo variable and
+    # SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / API_KEY are added as repo secrets,
+    # pointed at a disposable branch, not the demo project.
+    if: ${{ vars.RUN_INTEGRATION_TESTS == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test --workspace=api
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          API_KEY: ${{ secrets.API_KEY }}

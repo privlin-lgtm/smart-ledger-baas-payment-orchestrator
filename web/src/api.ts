@@ -1,4 +1,5 @@
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
+const API_KEY = import.meta.env.VITE_API_KEY ?? '';
 
 export type AccountType = 'platform' | 'supplier' | 'business' | 'system';
 
@@ -20,7 +21,13 @@ export interface TransactionSummary {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    headers: {
+      // A JSON content-type on a bodyless POST (freeze/unfreeze/cancel/reverse) makes
+      // Fastify reject it as an empty JSON body, so only set this when there's a body.
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      'x-api-key': API_KEY,
+      ...(init?.headers ?? {}),
+    },
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) {

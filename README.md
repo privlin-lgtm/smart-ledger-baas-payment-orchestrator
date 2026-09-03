@@ -21,8 +21,16 @@ would sit on top of.
     function that posts a transaction's entries atomically, validates the
     zero-sum invariant, and returns the existing transaction id on a replayed
     idempotency key instead of double-posting.
-  - `account_balances` — a view deriving each account's balance as
-    `sum(ledger_entries.amount_cents)`; balances are never stored directly.
+  - `accounts.balance_cents` — maintained by a trigger on every `ledger_entries`
+    insert (`account_balances` just reads it) rather than aggregating the whole
+    ledger on every read.
+  - `post_guarded_debit(...)` — used by payouts and card authorizations (not
+    manual split payments, which intentionally allow an account to go
+    negative). Locks the debited account's row for the rest of the
+    transaction before checking its balance, so two concurrent requests
+    against the same account can't both read the same starting balance and
+    both post — the second waits for the first to commit, then sees the
+    updated balance.
   - `payouts` — the operational lifecycle of a simulated payout to an external
     bank rail (`processing` → `settled` | `failed`). Unlike the ledger this row
     is mutable (status advances as the simulated processor "calls back"), but
@@ -47,6 +55,8 @@ would sit on top of.
 
 - **API — `/api` (Fastify + TypeScript)**
   - Talks to Postgres with the Supabase **service role** key (server-side only).
+  - Every request (except `GET /health`) requires an `x-api-key` header matching
+    `API_KEY`, and is rate-limited (`RATE_LIMIT_MAX` per minute per IP).
   - Validates all input with `zod` before it reaches the database.
   - `POST /api/payments/split` builds a balanced entry set (source account
     debited the full amount, each split recipient credited their share) and
@@ -83,20 +93,45 @@ would sit on top of.
    npm install
    ```
 
-2. Fill in the API's service role key. Open [`api/.env`](api/.env) and set
-   `SUPABASE_SERVICE_ROLE_KEY` (Supabase Dashboard → Project Settings → API →
-   Service role secret). Everything else is already filled in for the
-   `vhkkulfwrvxucmkjeemj` project. **Do not commit this file or share the key**
-   — it bypasses Row Level Security.
+2. **New Supabase project?** Apply the schema first — run every file in
+   [`supabase/migrations/`](supabase/migrations) against it, in order (via the
+   Supabase SQL editor, `supabase db push`, or the `apply_migration` MCP tool).
+   Using the existing `vhkkulfwrvxucmkjeemj` project, skip this step.
 
-3. Run both apps (two terminals):
+3. Fill in `api/.env` (copy from `api/.env.example` if it doesn't exist yet):
+   - `SUPABASE_SERVICE_ROLE_KEY` — Supabase Dashboard → Project Settings → API
+     → Service role secret.
+   - `API_KEY` — any random string every API request must send back as the
+     `x-api-key` header. Generate one with:
+     ```bash
+     node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
+     ```
+   **Do not commit `api/.env` or share these values** — the service role key
+   bypasses Row Level Security entirely.
+
+4. Fill in `web/.env` with `VITE_API_KEY` set to the **same** value as the
+   API's `API_KEY`.
+
+5. Run both apps (two terminals):
 
    ```bash
    npm run dev:api   # http://localhost:8787
    npm run dev:web   # http://localhost:5173
    ```
 
+6. Run the API test suite (see [`api/test/README.md`](api/test/README.md) for
+   what it does and does not cover):
+
+   ```bash
+   npm test --workspace=api
+   ```
+
 ## API reference
+
+Every request needs an `x-api-key: <API_KEY>` header (except `GET /health`).
+List endpoints (`transactions`, `payouts`, `cards`, `cards/authorizations`)
+accept `?limit=` (max 200, default 50) and `?before=<ISO timestamp>` for
+cursor pagination.
 
 | Method | Path                      | Purpose                                        |
 | ------ | ------------------------- | ----------------------------------------------- |
@@ -189,3 +224,26 @@ a synchronous authorize → capture/reverse — but no money actually leaves
 anywhere, no card can be used outside this app, and there's no real bank or
 card network integration behind either yet. That's the next layer this would
 plug into.
+
+## Known limitations
+
+Deliberate scope cuts for this MVP, not oversights:
+
+- **Auth is a single shared API key, not multi-tenant.** `x-api-key` proves
+  "you're allowed to talk to this API at all" — it does not scope any account
+  to a particular caller. A real multi-tenant deployment needs per-tenant
+  credentials and RLS policies that key off them (today RLS is enabled on
+  every table with no policies at all — only the service-role API server can
+  read or write anything).
+- **The API key ships in the browser bundle.** `web/src/api.ts` sends it from
+  `VITE_API_KEY`, which anyone using the deployed dashboard can read out of
+  their own network tab. It stops casual/drive-by discovery of the API; it is
+  not a real per-user boundary.
+- **The concurrency guard (`post_guarded_debit`) only covers payouts and card
+  authorizations.** Split payments have no balance floor by design (a
+  business account is allowed to go negative, modeling an implicit line of
+  credit to the platform) — this is a modeling choice, not a gap in the same
+  bug class as the one the guard fixes.
+- **The test suite runs against the live Supabase project**, not a disposable
+  branch — see [`api/test/README.md`](api/test/README.md) for why, and what
+  it would take to change that.

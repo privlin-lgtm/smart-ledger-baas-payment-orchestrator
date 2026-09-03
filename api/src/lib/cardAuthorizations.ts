@@ -1,5 +1,6 @@
 import { supabase } from '../supabase.js';
 import { getSystemAccountId } from './systemAccounts.js';
+import { settleOpenRecord } from './ledgerSettlement.js';
 
 export function generateSimulatedCardDetails() {
   const now = new Date();
@@ -73,24 +74,21 @@ export async function authorizeCard(
     return decline('card_limit_exceeded');
   }
 
-  const { data: account, error: accountError } = await supabase
-    .from('account_balances')
-    .select('balance_cents')
-    .eq('account_id', card.account_id)
-    .maybeSingle();
-  if (accountError) return { error: accountError.message, status: 500 };
-  if (!account || account.balance_cents < input.amountCents) return decline('insufficient_funds');
-
+  // post_guarded_debit locks the account row and checks its balance inside the same
+  // transaction as the hold, so two concurrent authorizations against the same account
+  // can't both read the same starting balance and both post.
   const holdAccountId = getSystemAccountId('Card Holds');
-  const { data: holdTransactionId, error: rpcError } = await supabase.rpc('post_transaction', {
+  const { data: holdTransactionId, error: rpcError } = await supabase.rpc('post_guarded_debit', {
     p_idempotency_key: `${input.idempotencyKey}:hold`,
     p_description: `Card authorization at ${input.merchant}`,
-    p_entries: [
-      { account_id: card.account_id, amount_cents: -input.amountCents },
-      { account_id: holdAccountId, amount_cents: input.amountCents },
-    ],
+    p_debit_account_id: card.account_id,
+    p_credit_account_id: holdAccountId,
+    p_amount_cents: input.amountCents,
   });
-  if (rpcError) return { error: rpcError.message, status: 422 };
+  if (rpcError) {
+    if (rpcError.message.includes('insufficient_funds')) return decline('insufficient_funds');
+    return { error: rpcError.message, status: 422 };
+  }
 
   const { data: authorization, error: insertError } = await supabase
     .from('card_authorizations')
@@ -130,36 +128,25 @@ export async function captureAuthorization(
   }
 
   const holdAccountId = getSystemAccountId('Card Holds');
-  const settlementAccountId = getSystemAccountId('Card Network Settlement');
   const releaseAmount = auth.amount_cents - captureAmount;
 
-  const entries = [
-    { account_id: holdAccountId, amount_cents: -auth.amount_cents },
-    { account_id: settlementAccountId, amount_cents: captureAmount },
-    ...(releaseAmount > 0 ? [{ account_id: auth.account_id, amount_cents: releaseAmount }] : []),
-  ];
-
-  const { data: transactionId, error: rpcError } = await supabase.rpc('post_transaction', {
-    p_idempotency_key: `${auth.idempotency_key}:capture`,
-    p_description: `Card authorization ${auth.id} captured`,
-    p_entries: entries,
-  });
-  if (rpcError) return { error: rpcError.message };
-
-  const { data: updated, error: updateError } = await supabase
-    .from('card_authorizations')
-    .update({
+  return settleOpenRecord<AuthorizationRow>({
+    table: 'card_authorizations',
+    id: authorizationId,
+    openStatus: 'authorized',
+    idempotencyKey: `${auth.idempotency_key}:capture`,
+    description: `Card authorization ${auth.id} captured`,
+    entries: [
+      { account_id: holdAccountId, amount_cents: -auth.amount_cents },
+      { account_id: getSystemAccountId('Card Network Settlement'), amount_cents: captureAmount },
+      ...(releaseAmount > 0 ? [{ account_id: auth.account_id, amount_cents: releaseAmount }] : []),
+    ],
+    updateFields: {
       status: 'captured',
       captured_amount_cents: captureAmount,
-      settlement_transaction_id: transactionId,
       settled_at: new Date().toISOString(),
-    })
-    .eq('id', authorizationId)
-    .eq('status', 'authorized')
-    .select()
-    .maybeSingle();
-  if (updateError) return { error: updateError.message };
-  return updated ?? auth;
+    },
+  });
 }
 
 // Idempotent for the same reason as captureAuthorization above.
@@ -174,27 +161,20 @@ export async function reverseAuthorization(authorizationId: string): Promise<Aut
   if (auth.status !== 'authorized') return auth;
 
   const holdAccountId = getSystemAccountId('Card Holds');
-  const { data: transactionId, error: rpcError } = await supabase.rpc('post_transaction', {
-    p_idempotency_key: `${auth.idempotency_key}:reverse`,
-    p_description: `Card authorization ${auth.id} reversed`,
-    p_entries: [
+
+  return settleOpenRecord<AuthorizationRow>({
+    table: 'card_authorizations',
+    id: authorizationId,
+    openStatus: 'authorized',
+    idempotencyKey: `${auth.idempotency_key}:reverse`,
+    description: `Card authorization ${auth.id} reversed`,
+    entries: [
       { account_id: holdAccountId, amount_cents: -auth.amount_cents },
       { account_id: auth.account_id, amount_cents: auth.amount_cents },
     ],
-  });
-  if (rpcError) return { error: rpcError.message };
-
-  const { data: updated, error: updateError } = await supabase
-    .from('card_authorizations')
-    .update({
+    updateFields: {
       status: 'reversed',
-      settlement_transaction_id: transactionId,
       settled_at: new Date().toISOString(),
-    })
-    .eq('id', authorizationId)
-    .eq('status', 'authorized')
-    .select()
-    .maybeSingle();
-  if (updateError) return { error: updateError.message };
-  return updated ?? auth;
+    },
+  });
 }

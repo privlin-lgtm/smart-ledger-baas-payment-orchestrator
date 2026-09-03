@@ -4,7 +4,10 @@ import { createAccountSchema } from '../schemas.js';
 
 export async function accountRoutes(app: FastifyInstance) {
   app.get('/api/accounts', async (_req, reply) => {
-    const { data, error } = await supabase.from('account_balances').select('*').order('name');
+    // Accounts are one per business partner, not one per event -- unlike
+    // transactions/payouts/cards there's no natural cursor to page through here, just a
+    // safety cap so this can't return an unbounded result set.
+    const { data, error } = await supabase.from('account_balances').select('*').order('name').limit(500);
     if (error) return reply.code(500).send({ error: error.message });
     return data;
   });

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { supabase } from '../supabase.js';
 import { authorizeCardSchema, captureAuthorizationSchema, issueCardSchema } from '../schemas.js';
 import { authorizeCard, captureAuthorization, generateSimulatedCardDetails, reverseAuthorization } from '../lib/cardAuthorizations.js';
+import { parsePagination } from '../lib/pagination.js';
 
 export async function cardRoutes(app: FastifyInstance) {
   // Issues a simulated virtual card for an account. Only a fake last4 is ever generated
@@ -44,21 +45,34 @@ export async function cardRoutes(app: FastifyInstance) {
     return reply.code(201).send(card);
   });
 
-  app.get('/api/cards', async (_req, reply) => {
-    const { data, error } = await supabase
+  app.get('/api/cards', async (req, reply) => {
+    const pagination = parsePagination(req.query);
+    if ('error' in pagination) return reply.code(400).send({ error: pagination.error });
+
+    let query = supabase
       .from('cards')
       .select('*, accounts(name, type)')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(pagination.limit);
+    if (pagination.before) query = query.lt('created_at', pagination.before);
+
+    const { data, error } = await query;
     if (error) return reply.code(500).send({ error: error.message });
     return data;
   });
 
-  app.get('/api/cards/authorizations', async (_req, reply) => {
-    const { data, error } = await supabase
+  app.get('/api/cards/authorizations', async (req, reply) => {
+    const pagination = parsePagination(req.query);
+    if ('error' in pagination) return reply.code(400).send({ error: pagination.error });
+
+    let query = supabase
       .from('card_authorizations')
       .select('*, cards(last4, network), accounts(name, type)')
       .order('authorized_at', { ascending: false })
-      .limit(50);
+      .limit(pagination.limit);
+    if (pagination.before) query = query.lt('authorized_at', pagination.before);
+
+    const { data, error } = await query;
     if (error) return reply.code(500).send({ error: error.message });
     return data;
   });

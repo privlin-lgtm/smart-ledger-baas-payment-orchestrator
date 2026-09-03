@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { supabase } from '../supabase.js';
 import { getSystemAccountId } from './systemAccounts.js';
+import { settleOpenRecord } from './ledgerSettlement.js';
 
 const SETTLEMENT_DELAY_MS_MIN = Number(process.env.PAYOUT_SETTLEMENT_DELAY_MS_MIN ?? 3000);
 const SETTLEMENT_DELAY_MS_MAX = Number(process.env.PAYOUT_SETTLEMENT_DELAY_MS_MAX ?? 8000);
@@ -62,57 +63,41 @@ export async function applyPayoutOutcome(payoutId: string, outcome: PayoutOutcom
 
   const clearingAccountId = getSystemAccountId('Payouts Clearing');
 
-  if (outcome.status === 'settled') {
-    const bankRailAccountId = getSystemAccountId('External Bank Rail');
-    const { data: transactionId, error: rpcError } = await supabase.rpc('post_transaction', {
-      p_idempotency_key: `${payout.idempotency_key}:settle`,
-      p_description: `Payout ${payout.id} settled via simulated bank rail`,
-      p_entries: [
-        { account_id: clearingAccountId, amount_cents: -payout.amount_cents },
-        { account_id: bankRailAccountId, amount_cents: payout.amount_cents },
-      ],
-    });
-    if (rpcError) throw new Error(rpcError.message);
+  const result =
+    outcome.status === 'settled'
+      ? await settleOpenRecord<PayoutRow>({
+          table: 'payouts',
+          id: payoutId,
+          openStatus: 'processing',
+          idempotencyKey: `${payout.idempotency_key}:settle`,
+          description: `Payout ${payout.id} settled via simulated bank rail`,
+          entries: [
+              { account_id: clearingAccountId, amount_cents: -payout.amount_cents },
+              { account_id: getSystemAccountId('External Bank Rail'), amount_cents: payout.amount_cents },
+          ],
+          updateFields: {
+            status: 'settled',
+            external_reference: `sim_${randomUUID()}`,
+            settled_at: new Date().toISOString(),
+          },
+        })
+      : await settleOpenRecord<PayoutRow>({
+          table: 'payouts',
+          id: payoutId,
+          openStatus: 'processing',
+          idempotencyKey: `${payout.idempotency_key}:fail`,
+          description: `Payout ${payout.id} failed: ${outcome.failureReason ?? 'unknown'}`,
+          entries: [
+              { account_id: clearingAccountId, amount_cents: -payout.amount_cents },
+              { account_id: payout.account_id, amount_cents: payout.amount_cents },
+          ],
+          updateFields: {
+            status: 'failed',
+            failure_reason: outcome.failureReason ?? 'unknown',
+            failed_at: new Date().toISOString(),
+          },
+        });
 
-    const { data: updated, error: updateError } = await supabase
-      .from('payouts')
-      .update({
-        status: 'settled',
-        settlement_transaction_id: transactionId,
-        external_reference: `sim_${randomUUID()}`,
-        settled_at: new Date().toISOString(),
-      })
-      .eq('id', payoutId)
-      .eq('status', 'processing')
-      .select()
-      .maybeSingle();
-    if (updateError) throw new Error(updateError.message);
-    return updated ?? payout;
-  }
-
-  // Failed: reverse the hold back to the originating account.
-  const { data: transactionId, error: rpcError } = await supabase.rpc('post_transaction', {
-    p_idempotency_key: `${payout.idempotency_key}:fail`,
-    p_description: `Payout ${payout.id} failed: ${outcome.failureReason ?? 'unknown'}`,
-    p_entries: [
-      { account_id: clearingAccountId, amount_cents: -payout.amount_cents },
-      { account_id: payout.account_id, amount_cents: payout.amount_cents },
-    ],
-  });
-  if (rpcError) throw new Error(rpcError.message);
-
-  const { data: updated, error: updateError } = await supabase
-    .from('payouts')
-    .update({
-      status: 'failed',
-      settlement_transaction_id: transactionId,
-      failure_reason: outcome.failureReason ?? 'unknown',
-      failed_at: new Date().toISOString(),
-    })
-    .eq('id', payoutId)
-    .eq('status', 'processing')
-    .select()
-    .maybeSingle();
-  if (updateError) throw new Error(updateError.message);
-  return updated ?? payout;
+  if ('error' in result) throw new Error(result.error);
+  return result;
 }

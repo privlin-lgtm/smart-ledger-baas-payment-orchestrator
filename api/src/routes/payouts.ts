@@ -3,6 +3,7 @@ import { supabase } from '../supabase.js';
 import { createPayoutSchema, payoutWebhookSchema } from '../schemas.js';
 import { getSystemAccountId } from '../lib/systemAccounts.js';
 import { applyPayoutOutcome, scheduleSimulatedSettlement } from '../lib/payoutSettlement.js';
+import { parsePagination } from '../lib/pagination.js';
 
 export async function payoutRoutes(app: FastifyInstance) {
   // Requests a payout: holds the funds immediately (source account -> Payouts Clearing,
@@ -22,29 +23,29 @@ export async function payoutRoutes(app: FastifyInstance) {
     if (existing) return reply.code(200).send(existing);
 
     const { data: account, error: accountError } = await supabase
-      .from('account_balances')
-      .select('*')
-      .eq('account_id', accountId)
+      .from('accounts')
+      .select('type')
+      .eq('id', accountId)
       .maybeSingle();
     if (accountError) return reply.code(500).send({ error: accountError.message });
     if (!account) return reply.code(404).send({ error: 'account not found' });
     if (account.type === 'system') return reply.code(400).send({ error: 'cannot pay out from a system account' });
-    if (account.balance_cents < amountCents) {
-      return reply.code(400).send({
-        error: `insufficient funds: balance is ${account.balance_cents}, requested ${amountCents}`,
-      });
-    }
 
+    // post_guarded_debit locks the account row and checks its balance inside the same
+    // transaction as the hold, closing the check-then-post race a separate balance read
+    // here would leave open under concurrent requests.
     const clearingAccountId = getSystemAccountId('Payouts Clearing');
-    const { data: holdTransactionId, error: rpcError } = await supabase.rpc('post_transaction', {
+    const { data: holdTransactionId, error: rpcError } = await supabase.rpc('post_guarded_debit', {
       p_idempotency_key: `${idempotencyKey}:hold`,
       p_description: description ?? `Payout hold for ${accountId}`,
-      p_entries: [
-        { account_id: accountId, amount_cents: -amountCents },
-        { account_id: clearingAccountId, amount_cents: amountCents },
-      ],
+      p_debit_account_id: accountId,
+      p_credit_account_id: clearingAccountId,
+      p_amount_cents: amountCents,
     });
-    if (rpcError) return reply.code(422).send({ error: rpcError.message });
+    if (rpcError) {
+      const status = rpcError.message.includes('insufficient_funds') ? 400 : 422;
+      return reply.code(status).send({ error: rpcError.message });
+    }
 
     const { data: payout, error: insertError } = await supabase
       .from('payouts')
@@ -63,12 +64,18 @@ export async function payoutRoutes(app: FastifyInstance) {
     return reply.code(201).send(payout);
   });
 
-  app.get('/api/payouts', async (_req, reply) => {
-    const { data, error } = await supabase
+  app.get('/api/payouts', async (req, reply) => {
+    const pagination = parsePagination(req.query);
+    if ('error' in pagination) return reply.code(400).send({ error: pagination.error });
+
+    let query = supabase
       .from('payouts')
       .select('*, accounts(name, type)')
       .order('requested_at', { ascending: false })
-      .limit(50);
+      .limit(pagination.limit);
+    if (pagination.before) query = query.lt('requested_at', pagination.before);
+
+    const { data, error } = await query;
     if (error) return reply.code(500).send({ error: error.message });
     return data;
   });
