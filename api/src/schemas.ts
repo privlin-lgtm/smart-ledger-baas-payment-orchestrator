@@ -30,3 +30,19 @@ export const payoutWebhookSchema = z.object({
   status: z.enum(['settled', 'failed']),
   failureReason: z.string().max(200).optional(),
 });
+
+export const issueCardSchema = z.object({
+  idempotencyKey: z.string().min(1).max(200),
+  accountId: z.string().uuid(),
+  spendLimitCents: z.number().int().positive().optional(),
+});
+
+export const authorizeCardSchema = z.object({
+  idempotencyKey: z.string().min(1).max(200),
+  amountCents: z.number().int().positive(),
+  merchant: z.string().min(1).max(200),
+});
+
+export const captureAuthorizationSchema = z.object({
+  captureAmountCents: z.number().int().positive().optional(),
+});

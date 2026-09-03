@@ -157,6 +157,29 @@ th {
   color: var(--danger);
 }
 
+.badge-card-active,
+.badge-auth-authorized {
+  background: #fff4d6;
+  color: #92700c;
+}
+
+.badge-card-frozen {
+  background: #e2f2fe;
+  color: #1a6fb0;
+}
+
+.badge-card-canceled,
+.badge-auth-reversed,
+.badge-auth-declined {
+  background: #eceef1;
+  color: #565d68;
+}
+
+.badge-auth-captured {
+  background: #e9f7ef;
+  color: var(--ok);
+}
+
 .hint {
   margin: -6px 0 14px;
   font-size: 13px;

@@ -1,9 +1,14 @@
 import { supabase } from '../supabase.js';
 
-// Internal ledger-only accounts the payout engine posts against. Seeded by migration
-// (accounts_system_name_unique enforces exactly one of each); resolved by name at boot
-// so the API never hardcodes their generated ids.
-const SYSTEM_ACCOUNT_NAMES = ['Payouts Clearing', 'External Bank Rail'] as const;
+// Internal ledger-only accounts the payout and card-authorization engines post against.
+// Seeded by migration (accounts_system_name_unique enforces exactly one of each); resolved
+// by name at boot so the API never hardcodes their generated ids.
+const SYSTEM_ACCOUNT_NAMES = [
+  'Payouts Clearing',
+  'External Bank Rail',
+  'Card Holds',
+  'Card Network Settlement',
+] as const;
 type SystemAccountName = (typeof SYSTEM_ACCOUNT_NAMES)[number];
 
 let systemAccountIds: Record<SystemAccountName, string> | null = null;
@@ -23,10 +28,9 @@ export async function loadSystemAccounts(): Promise<void> {
     throw new Error(`missing system account(s), run the migration: ${missing.join(', ')}`);
   }
 
-  systemAccountIds = {
-    'Payouts Clearing': byName.get('Payouts Clearing')!,
-    'External Bank Rail': byName.get('External Bank Rail')!,
-  };
+  systemAccountIds = Object.fromEntries(
+    SYSTEM_ACCOUNT_NAMES.map((name) => [name, byName.get(name)!]),
+  ) as Record<SystemAccountName, string>;
 }
 
 export function getSystemAccountId(name: SystemAccountName): string {

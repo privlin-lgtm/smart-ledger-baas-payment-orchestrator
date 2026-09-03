@@ -5,6 +5,7 @@ import { accountRoutes } from './routes/accounts.js';
 import { paymentRoutes } from './routes/payments.js';
 import { transactionRoutes } from './routes/transactions.js';
 import { payoutRoutes } from './routes/payouts.js';
+import { cardRoutes } from './routes/cards.js';
 import { loadSystemAccounts } from './lib/systemAccounts.js';
 
 const app = Fastify({ logger: true });
@@ -21,6 +22,7 @@ await app.register(accountRoutes);
 await app.register(paymentRoutes);
 await app.register(transactionRoutes);
 await app.register(payoutRoutes);
+await app.register(cardRoutes);
 
 const port = Number(process.env.PORT ?? 8787);
 

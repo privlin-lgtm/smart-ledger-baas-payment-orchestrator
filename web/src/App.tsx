@@ -2,15 +2,24 @@ import { useEffect, useState } from 'react';
 import {
   type AccountBalance,
   type AccountType,
+  type Card,
+  type CardAuthorization,
   type Payout,
   type TransactionSummary,
+  authorizeCard,
+  captureAuthorization,
   createAccount,
+  issueCard,
   listAccounts,
+  listCardAuthorizations,
+  listCards,
   listPayouts,
   listTransactions,
   postSplitPayment,
   requestPayout,
+  reverseAuthorization,
   sendPayoutWebhook,
+  setCardStatus,
 } from './api';
 
 function formatCents(cents: number): string {
@@ -48,19 +57,33 @@ export default function App() {
   const [payoutAmountDollars, setPayoutAmountDollars] = useState('');
   const [payoutDescription, setPayoutDescription] = useState('');
 
+  const [cards, setCards] = useState<Card[]>([]);
+  const [authorizations, setAuthorizations] = useState<CardAuthorization[]>([]);
+  const [cardAccountId, setCardAccountId] = useState('');
+  const [cardSpendLimitDollars, setCardSpendLimitDollars] = useState('');
+
+  const [authCardId, setAuthCardId] = useState('');
+  const [authAmountDollars, setAuthAmountDollars] = useState('');
+  const [authMerchant, setAuthMerchant] = useState('');
+
   // Real customer accounts only — the payout/clearing rail accounts are ledger-internal
   // and shouldn't be picked as a source, recipient, or payout destination by hand.
   const payableAccounts = accounts.filter((a) => a.type !== 'system');
+  const activeCards = cards.filter((c) => c.status === 'active');
 
   async function refresh() {
-    const [accountsData, transactionsData, payoutsData] = await Promise.all([
+    const [accountsData, transactionsData, payoutsData, cardsData, authorizationsData] = await Promise.all([
       listAccounts(),
       listTransactions(),
       listPayouts(),
+      listCards(),
+      listCardAuthorizations(),
     ]);
     setAccounts(accountsData);
     setTransactions(transactionsData);
     setPayouts(payoutsData);
+    setCards(cardsData);
+    setAuthorizations(authorizationsData);
   }
 
   useEffect(() => {
@@ -171,6 +194,91 @@ export default function App() {
       await sendPayoutWebhook(payoutId, status, status === 'failed' ? 'manually triggered from console' : undefined);
       await refresh();
       setNotice(`Simulated bank-rail webhook: payout ${status}`);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleIssueCard(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setNotice(null);
+    if (!cardAccountId) return setError('choose an account to issue the card for');
+
+    try {
+      const card = await issueCard({
+        idempotencyKey: crypto.randomUUID(),
+        accountId: cardAccountId,
+        spendLimitCents: cardSpendLimitDollars ? dollarsToCents(cardSpendLimitDollars) : undefined,
+      });
+      setCardSpendLimitDollars('');
+      await refresh();
+      setNotice(`Issued card ending in ${card.last4}`);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleCardStatus(cardId: string, action: 'freeze' | 'unfreeze' | 'cancel') {
+    setError(null);
+    setNotice(null);
+    try {
+      await setCardStatus(cardId, action);
+      await refresh();
+      setNotice(`Card ${action === 'unfreeze' ? 'reactivated' : action + 'd'}`);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleAuthorize(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setNotice(null);
+
+    const amountCents = dollarsToCents(authAmountDollars || '0');
+    if (!authCardId) return setError('choose a card');
+    if (amountCents <= 0) return setError('enter an amount greater than zero');
+    if (!authMerchant) return setError('enter a merchant name');
+
+    try {
+      const auth = await authorizeCard(authCardId, {
+        idempotencyKey: crypto.randomUUID(),
+        amountCents,
+        merchant: authMerchant,
+      });
+      setAuthAmountDollars('');
+      setAuthMerchant('');
+      await refresh();
+      setNotice(
+        auth.status === 'declined'
+          ? `Declined: ${auth.decline_reason}`
+          : `Authorized ${formatCents(auth.amount_cents)} at ${auth.merchant}`,
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleCapture(authorizationId: string) {
+    setError(null);
+    setNotice(null);
+    try {
+      await captureAuthorization(authorizationId);
+      await refresh();
+      setNotice('Authorization captured');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function handleReverse(authorizationId: string) {
+    setError(null);
+    setNotice(null);
+    try {
+      await reverseAuthorization(authorizationId);
+      await refresh();
+      setNotice('Authorization reversed — hold released');
     } catch (err) {
       setError((err as Error).message);
     }
@@ -395,6 +503,185 @@ export default function App() {
               {payouts.length === 0 && (
                 <tr>
                   <td colSpan={6}>No payouts yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+
+        <section className="panel">
+          <h2>Cards</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th>Card</th>
+                <th>Limit</th>
+                <th>Status</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {cards.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.accounts?.name ?? c.account_id}</td>
+                  <td className="mono">
+                    {c.network} •••• {c.last4}
+                  </td>
+                  <td>{c.spend_limit_cents === null ? '—' : formatCents(c.spend_limit_cents)}</td>
+                  <td>
+                    <span className={`badge badge-card-${c.status}`}>{c.status}</span>
+                  </td>
+                  <td>
+                    <div className="payout-actions">
+                      {c.status === 'active' && (
+                        <>
+                          <button type="button" className="ghost" onClick={() => handleCardStatus(c.id, 'freeze')}>
+                            Freeze
+                          </button>
+                          <button type="button" className="ghost" onClick={() => handleCardStatus(c.id, 'cancel')}>
+                            Cancel
+                          </button>
+                        </>
+                      )}
+                      {c.status === 'frozen' && (
+                        <>
+                          <button type="button" className="ghost" onClick={() => handleCardStatus(c.id, 'unfreeze')}>
+                            Unfreeze
+                          </button>
+                          <button type="button" className="ghost" onClick={() => handleCardStatus(c.id, 'cancel')}>
+                            Cancel
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {cards.length === 0 && (
+                <tr>
+                  <td colSpan={5}>No cards yet — issue one below.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+
+          <form className="form" onSubmit={handleIssueCard}>
+            <h3>Issue a card</h3>
+            <label>
+              Account
+              <select value={cardAccountId} onChange={(e) => setCardAccountId(e.target.value)} required>
+                <option value="">Select an account</option>
+                {payableAccounts.map((a) => (
+                  <option key={a.account_id} value={a.account_id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Per-transaction limit (USD, optional)
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={cardSpendLimitDollars}
+                onChange={(e) => setCardSpendLimitDollars(e.target.value)}
+                placeholder="No limit"
+              />
+            </label>
+            <button type="submit">Issue card</button>
+          </form>
+        </section>
+
+        <section className="panel panel-wide">
+          <h2>Authorize a card transaction</h2>
+          <p className="hint">
+            Card authorizations decide synchronously — approved (funds held) or declined — just like a real
+            card network. Capture to pay the merchant, or reverse to void the hold.
+          </p>
+          <form className="form" onSubmit={handleAuthorize}>
+            <label>
+              Card
+              <select value={authCardId} onChange={(e) => setAuthCardId(e.target.value)} required>
+                <option value="">Select a card</option>
+                {activeCards.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.accounts?.name ?? c.account_id} — •••• {c.last4}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Amount (USD)
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={authAmountDollars}
+                onChange={(e) => setAuthAmountDollars(e.target.value)}
+                placeholder="25.00"
+                required
+              />
+            </label>
+            <label>
+              Merchant
+              <input
+                value={authMerchant}
+                onChange={(e) => setAuthMerchant(e.target.value)}
+                placeholder="Office Depot"
+                required
+              />
+            </label>
+            <button type="submit">Authorize</button>
+          </form>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th>Card</th>
+                <th>Merchant</th>
+                <th>Amount</th>
+                <th>Status</th>
+                <th>Detail</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {authorizations.map((a) => (
+                <tr key={a.id}>
+                  <td>{a.accounts?.name ?? a.account_id}</td>
+                  <td className="mono">{a.cards ? `•••• ${a.cards.last4}` : a.card_id}</td>
+                  <td>{a.merchant}</td>
+                  <td>
+                    {formatCents(a.amount_cents)}
+                    {a.status === 'captured' &&
+                      a.captured_amount_cents !== null &&
+                      a.captured_amount_cents !== a.amount_cents &&
+                      ` (captured ${formatCents(a.captured_amount_cents)})`}
+                  </td>
+                  <td>
+                    <span className={`badge badge-auth-${a.status}`}>{a.status}</span>
+                  </td>
+                  <td className="mono">{a.status === 'declined' && a.decline_reason}</td>
+                  <td>
+                    {a.status === 'authorized' && (
+                      <div className="payout-actions">
+                        <button type="button" className="ghost" onClick={() => handleCapture(a.id)}>
+                          Capture
+                        </button>
+                        <button type="button" className="ghost" onClick={() => handleReverse(a.id)}>
+                          Reverse
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {authorizations.length === 0 && (
+                <tr>
+                  <td colSpan={7}>No authorizations yet.</td>
                 </tr>
               )}
             </tbody>

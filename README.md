@@ -29,9 +29,19 @@ would sit on top of.
     every transition is backed by an immutable ledger transaction
     (`hold_transaction_id`, `settlement_transaction_id`), so the money movement
     itself stays fully auditable.
-  - Two seeded `system`-type accounts — `Payouts Clearing` and `External Bank
-    Rail` — are the ledger-internal rails a payout's funds move through; they're
-    excluded from manual split payments.
+  - `cards` — simulated virtual cards issued against an account. Only a fake
+    `last4` is ever generated or stored — never a full PAN/CVV, matching how a
+    real card-issuing API keeps that out of your systems entirely (PCI scope).
+    An optional `spend_limit_cents` caps a single authorization.
+  - `card_authorizations` — a card transaction's lifecycle: `authorized` (funds
+    held) → `captured` (merchant paid) or `reversed` (hold released), or
+    `declined` outright with no ledger impact. Same hold/settle pattern as
+    payouts, but the authorization decision is synchronous — approved or
+    declined immediately, like a real card network's sub-second response,
+    rather than an async callback.
+  - Four seeded `system`-type accounts — `Payouts Clearing`, `External Bank
+    Rail`, `Card Holds`, `Card Network Settlement` — are the ledger-internal
+    rails money moves through; they're excluded from manual split payments.
   - RLS is enabled on every table with **no policies**, so `anon`/`authenticated`
     have zero access by default — all reads/writes are mediated by the API below.
 
@@ -50,11 +60,20 @@ would sit on top of.
     Payouts Clearing to External Bank Rail; on `failed` it reverses the hold
     back to the source account. Idempotent — a payout no longer `processing` is
     left untouched, so a duplicate/late callback can't double-post.
+  - `POST /api/cards/:id/authorize` decides synchronously: declines outright
+    (frozen/canceled card, over the card's limit, insufficient account balance)
+    with no ledger entry at all, or approves and holds funds against Card Holds.
+  - `POST /api/cards/authorizations/:id/capture` (optionally partial — the
+    difference is released back to the account) and `.../reverse` settle or
+    void an authorization; both are idempotent the same way the payout webhook
+    is, and a terminal authorization can't be captured after being reversed
+    (or vice versa).
 
 - **Web — `/web` (React + Vite)**
   - Minimal console: create accounts, see live balances, post a split payment,
     request a payout and watch it settle or fail in real time (polls while any
-    payout is `processing`), browse recent transactions.
+    payout is `processing`), issue cards and manage their status, run card
+    authorizations and capture/reverse them, browse recent transactions.
 
 ## Setup
 
@@ -91,6 +110,16 @@ would sit on top of.
 | GET    | `/api/payouts`             | List recent payouts                             |
 | GET    | `/api/payouts/:id`         | One payout                                      |
 | POST   | `/api/payouts/:id/webhook` | Simulate the bank rail's settlement callback     |
+| POST   | `/api/cards`               | Issue a simulated virtual card                  |
+| GET    | `/api/cards`               | List cards                                      |
+| GET    | `/api/cards/:id`           | One card + its authorizations                   |
+| POST   | `/api/cards/:id/freeze`    | Freeze a card (blocks future authorizations)    |
+| POST   | `/api/cards/:id/unfreeze`  | Reactivate a frozen card                        |
+| POST   | `/api/cards/:id/cancel`    | Cancel a card (terminal)                        |
+| POST   | `/api/cards/:id/authorize` | Attempt a card authorization (sync approve/decline) |
+| GET    | `/api/cards/authorizations` | List recent authorizations across all cards    |
+| POST   | `/api/cards/authorizations/:id/capture` | Capture (optionally partial) an authorization |
+| POST   | `/api/cards/authorizations/:id/reverse` | Void an authorization, releasing the hold |
 
 `POST /api/payments/split` body:
 
@@ -127,11 +156,36 @@ and outcome are controlled by env vars (`PAYOUT_SETTLEMENT_DELAY_MS_MIN/MAX`,
 `POST /api/payouts/:id/webhook` with `{"status": "settled"}` or
 `{"status": "failed", "failureReason": "..."}`.
 
+`POST /api/cards` body:
+
+```json
+{
+  "idempotencyKey": "unique-per-attempt",
+  "accountId": "<supplier account uuid>",
+  "spendLimitCents": 5000
+}
+```
+
+`spendLimitCents` is optional and caps a single authorization; omit it to bound
+spending only by the account's ledger balance. `POST /api/cards/:id/authorize`
+body:
+
+```json
+{ "idempotencyKey": "unique-per-attempt", "amountCents": 2500, "merchant": "Office Depot" }
+```
+
+The response's `status` is `authorized` or `declined` (with a `decline_reason`
+of `card_frozen`, `card_canceled`, `card_limit_exceeded`, or
+`insufficient_funds`) — both are `200`/`201` responses, not errors, since a
+decline is a normal outcome for a card network.
+
 ## What's simulated vs. real
 
 The ledger, balances, and audit trail are fully real (backed by actual
-Postgres constraints and triggers, not just application code). The payout
-engine models a real BaaS transfer API's async hold → webhook → settle/fail
-lifecycle entirely within the ledger — no money actually leaves anywhere, and
-there's no real bank or card-issuing integration behind it yet. That's the
-next layer this would plug into.
+Postgres constraints and triggers, not just application code). The payout and
+card-issuance engines each model a real BaaS provider's lifecycle entirely
+within the ledger — payouts as an async hold → webhook → settle/fail, cards as
+a synchronous authorize → capture/reverse — but no money actually leaves
+anywhere, no card can be used outside this app, and there's no real bank or
+card network integration behind either yet. That's the next layer this would
+plug into.

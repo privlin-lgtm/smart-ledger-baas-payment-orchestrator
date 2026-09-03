@@ -97,3 +97,70 @@ export function sendPayoutWebhook(payoutId: string, status: 'settled' | 'failed'
     body: JSON.stringify({ status, failureReason }),
   });
 }
+
+export type CardStatus = 'active' | 'frozen' | 'canceled';
+
+export interface Card {
+  id: string;
+  account_id: string;
+  status: CardStatus;
+  network: string;
+  last4: string;
+  exp_month: number;
+  exp_year: number;
+  spend_limit_cents: number | null;
+  created_at: string;
+  canceled_at: string | null;
+  accounts: { name: string; type: AccountType } | null;
+}
+
+export type AuthorizationStatus = 'authorized' | 'captured' | 'reversed' | 'declined';
+
+export interface CardAuthorization {
+  id: string;
+  card_id: string;
+  account_id: string;
+  merchant: string;
+  amount_cents: number;
+  captured_amount_cents: number | null;
+  status: AuthorizationStatus;
+  decline_reason: string | null;
+  authorized_at: string;
+  settled_at: string | null;
+  cards?: { last4: string; network: string } | null;
+  accounts?: { name: string; type: AccountType } | null;
+}
+
+export function listCards() {
+  return request<Card[]>('/api/cards');
+}
+
+export function issueCard(input: { idempotencyKey: string; accountId: string; spendLimitCents?: number }) {
+  return request<Card>('/api/cards', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function setCardStatus(cardId: string, action: 'freeze' | 'unfreeze' | 'cancel') {
+  return request<Card>(`/api/cards/${cardId}/${action}`, { method: 'POST' });
+}
+
+export function listCardAuthorizations() {
+  return request<CardAuthorization[]>('/api/cards/authorizations');
+}
+
+export function authorizeCard(cardId: string, input: { idempotencyKey: string; amountCents: number; merchant: string }) {
+  return request<CardAuthorization>(`/api/cards/${cardId}/authorize`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function captureAuthorization(authorizationId: string, captureAmountCents?: number) {
+  return request<CardAuthorization>(`/api/cards/authorizations/${authorizationId}/capture`, {
+    method: 'POST',
+    body: JSON.stringify({ captureAmountCents }),
+  });
+}
+
+export function reverseAuthorization(authorizationId: string) {
+  return request<CardAuthorization>(`/api/cards/authorizations/${authorizationId}/reverse`, { method: 'POST' });
+}
