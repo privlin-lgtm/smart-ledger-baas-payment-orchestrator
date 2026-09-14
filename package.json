@@ -9,6 +9,7 @@
     "dev:api": "npm run dev --workspace=api",
     "dev:web": "npm run dev --workspace=web",
     "build:api": "npm run build --workspace=api",
-    "build:web": "npm run build --workspace=web"
+    "build:web": "npm run build --workspace=web",
+    "seed": "node api/scripts/seed-demo.mjs"
   }
 }
