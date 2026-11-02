@@ -93,10 +93,14 @@ would sit on top of.
    npm install
    ```
 
-2. **New Supabase project?** Apply the schema first — run every file in
-   [`supabase/migrations/`](supabase/migrations) against it, in order (via the
-   Supabase SQL editor, `supabase db push`, or the `apply_migration` MCP tool).
-   Using the existing `vhkkulfwrvxucmkjeemj` project, skip this step.
+2. **Create the database.** smart-ledger runs in its own Supabase project. On a
+   new project, apply the schema first: run every file in
+   [`supabase/migrations/`](supabase/migrations) against it, in filename order
+   (via the Supabase SQL editor, `supabase db push`, or the `apply_migration`
+   MCP tool). Then set `SUPABASE_URL` in `api/.env` to that project's URL. To
+   carry existing data over from another project, follow
+   [`docs/supabase-move.md`](docs/supabase-move.md) instead: a plain copy
+   double-counts balances.
 
 3. Fill in `api/.env` (copy from `api/.env.example` if it doesn't exist yet):
    - `SUPABASE_SERVICE_ROLE_KEY` — Supabase Dashboard → Project Settings → API
