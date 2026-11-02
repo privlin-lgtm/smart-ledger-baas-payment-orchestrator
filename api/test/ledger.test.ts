@@ -69,9 +69,35 @@ describe('core ledger invariants', () => {
     expect(recipientBalance.balance_cents).toBe(500);
   });
 
+  // Both append-only checks target rows this test created itself, never pre-existing data,
+  // so even if the triggers were missing they could only alter the test's own throwaway rows.
+  async function postThrowawayPayment(): Promise<string> {
+    const source = await createAccount(app, 'business');
+    const recipient = await createAccount(app, 'supplier');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/payments/split',
+      headers: authHeaders(),
+      payload: {
+        idempotencyKey: uniqueKey('append-only'),
+        sourceAccountId: source.id,
+        amountCents: 100,
+        splits: [{ accountId: recipient.id, amountCents: 100 }],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json().transactionId;
+  }
+
   it('append-only: rejects a direct UPDATE on ledger_entries even at the database layer', async () => {
+    const transactionId = await postThrowawayPayment();
     const { supabase } = await import('../src/supabase.js');
-    const { data: rows } = await supabase.from('ledger_entries').select('id').limit(1);
+    const { data: rows } = await supabase
+      .from('ledger_entries')
+      .select('id')
+      .eq('transaction_id', transactionId)
+      .limit(1);
+    expect(rows).toHaveLength(1);
     const { error } = await supabase
       .from('ledger_entries')
       .update({ amount_cents: 999999 })
@@ -82,9 +108,9 @@ describe('core ledger invariants', () => {
   });
 
   it('append-only: rejects a direct DELETE on transactions even at the database layer', async () => {
+    const transactionId = await postThrowawayPayment();
     const { supabase } = await import('../src/supabase.js');
-    const { data: rows } = await supabase.from('transactions').select('id').limit(1);
-    const { error } = await supabase.from('transactions').delete().eq('id', rows![0].id);
+    const { error } = await supabase.from('transactions').delete().eq('id', transactionId);
 
     expect(error).not.toBeNull();
     expect(error!.message).toMatch(/append-only/);
