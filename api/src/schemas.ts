@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+// IDs use z.guid() rather than z.uuid(): zod 4's z.uuid() enforces RFC 9562 version/variant
+// bits, while zod 3's .uuid() (and Postgres's uuid type) accept any 8-4-4-4-12 hex string.
+
 // A generous but real ceiling ($100M) -- prevents absurd/overflow-adjacent values from
 // ever reaching the ledger without constraining any plausible real transaction.
 const MAX_AMOUNT_CENTS = 100_000_000_00;
@@ -11,7 +14,7 @@ export const createAccountSchema = z.object({
 });
 
 export const splitSchema = z.object({
-  accountId: z.string().uuid(),
+  accountId: z.guid(),
   amountCents: amountCentsSchema,
   kind: z.string().min(1).max(50).optional(),
 });
@@ -19,14 +22,14 @@ export const splitSchema = z.object({
 export const splitPaymentSchema = z.object({
   idempotencyKey: z.string().min(1).max(200),
   description: z.string().max(500).optional(),
-  sourceAccountId: z.string().uuid(),
+  sourceAccountId: z.guid(),
   amountCents: amountCentsSchema,
   splits: z.array(splitSchema).min(1),
 });
 
 export const createPayoutSchema = z.object({
   idempotencyKey: z.string().min(1).max(200),
-  accountId: z.string().uuid(),
+  accountId: z.guid(),
   amountCents: amountCentsSchema,
   description: z.string().max(500).optional(),
 });
@@ -38,7 +41,7 @@ export const payoutWebhookSchema = z.object({
 
 export const issueCardSchema = z.object({
   idempotencyKey: z.string().min(1).max(200),
-  accountId: z.string().uuid(),
+  accountId: z.guid(),
   spendLimitCents: amountCentsSchema.optional(),
 });
 
