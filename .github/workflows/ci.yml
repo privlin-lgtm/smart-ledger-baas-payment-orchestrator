@@ -21,10 +21,12 @@ jobs:
 
   test-api:
     runs-on: ubuntu-latest
-    # These integration tests hit a real Supabase project (see api/test/README.md) --
-    # they only run once RUN_INTEGRATION_TESTS is set to 'true' as a repo variable and
-    # SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / API_KEY are added as repo secrets,
-    # pointed at a disposable branch, not the demo project.
+    # These integration tests hit a real Supabase project and write permanent append-only
+    # rows (see api/test/README.md). They only run once RUN_INTEGRATION_TESTS is set to
+    # 'true' as a repo variable and SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / API_KEY are
+    # added as repo secrets for a DISPOSABLE test project or branch -- never the demo
+    # project (vhkkulfwrvxucmkjeemj) or production. The test env guard
+    # (api/test/env-guard.ts) fails the job if SUPABASE_URL points at the demo project.
     if: ${{ vars.RUN_INTEGRATION_TESTS == 'true' }}
     steps:
       - uses: actions/checkout@v4
@@ -38,3 +40,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           API_KEY: ${{ secrets.API_KEY }}
+          # CI has no api/.env.test file; this tells the guard the env above is the test env.
+          SMART_LEDGER_TEST_ENV_FROM_PROCESS: 'true'
