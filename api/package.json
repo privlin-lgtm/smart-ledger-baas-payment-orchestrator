@@ -7,7 +7,9 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "test": "vitest run"
+    "pretest": "tsx test/check-env.ts",
+    "test": "vitest run",
+    "test:check-env": "tsx test/check-env.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
