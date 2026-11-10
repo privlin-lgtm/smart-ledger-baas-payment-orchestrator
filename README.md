@@ -248,9 +248,9 @@ Deliberate scope cuts for this MVP, not oversights:
   business account is allowed to go negative, modeling an implicit line of
   credit to the platform) — this is a modeling choice, not a gap in the same
   bug class as the one the guard fixes.
-- **The test suite runs against the live Supabase project**, not a disposable
-  branch — see [`api/test/README.md`](api/test/README.md) for why, and what
-  it would take to change that.
+- **The test suite runs against a throwaway local Supabase stack**
+  (`supabase start`), in CI and locally, never the demo or production project.
+  See [`api/test/README.md`](api/test/README.md).
 
 <!-- yanshuf-secrets -->
 ## Local secrets

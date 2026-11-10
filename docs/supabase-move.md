@@ -153,13 +153,10 @@ values lives outside the repo:
 - [ ] **The API host's environment variables** (wherever the API is deployed):
       the same `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Redeploy or
       restart so it picks them up.
-- [ ] **GitHub repository secrets** (Settings → Secrets and variables → Actions):
-      `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `API_KEY`. These feed the
-      `test-api` CI job, which writes rows, so point them at a **test** project
-      or branch, not at the new production project.
-- [ ] **GitHub repository variable `RUN_INTEGRATION_TESTS`**: leave it unset (or
-      not `true`) until the secrets above point at a test project. Only then set
-      it to `true`.
+- [x] **CI test database**: nothing to set up. The `test-api` CI job starts a
+      local Supabase stack on the runner and needs no GitHub secrets or
+      `RUN_INTEGRATION_TESTS` variable (see `api/test/README.md`). Don't add
+      `SUPABASE_*` secrets for the production project.
 - [ ] **Encrypted secrets backup**: make a new `yanshuf-secrets-YYYY-MM-DD.7z`
       in `G:\My Drive\Secrets Vault (ENCRYPTED)\` with the updated `api\.env`,
       refresh the copy in `C:\Users\privlin\secrets-backup\`, and check the
