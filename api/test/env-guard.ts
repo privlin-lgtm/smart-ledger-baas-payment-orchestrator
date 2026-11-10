@@ -13,11 +13,11 @@ export const TEST_ENV_PATH = resolve(apiDir, '.env.test');
 const APP_ENV_PATH = resolve(apiDir, '.env');
 
 // Supabase project refs that tests must never touch. vhkkulfwrvxucmkjeemj is the shared
-// demo project. Add the dedicated smart-ledger project's ref here once it exists.
-export const BLOCKED_SUPABASE_REFS = ['vhkkulfwrvxucmkjeemj'];
+// demo project; xubkyfuknyfjecqzxdpx is the dedicated smart-ledger production project.
+export const BLOCKED_SUPABASE_REFS = ['vhkkulfwrvxucmkjeemj', 'xubkyfuknyfjecqzxdpx'];
 
-// CI has no .env.test file: it injects the test project's details as secrets and sets this
-// flag to say "the process env is the test env". Nothing else should set it.
+// Escape hatch for running with the test env already exported in the process instead of
+// api/.env.test. CI no longer needs it (it writes api/.env.test from a local Supabase stack).
 const FROM_PROCESS_FLAG = 'SMART_LEDGER_TEST_ENV_FROM_PROCESS';
 
 export class TestEnvError extends Error {}
